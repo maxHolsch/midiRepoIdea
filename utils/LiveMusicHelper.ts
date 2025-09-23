@@ -63,14 +63,12 @@ export class LiveMusicHelper extends EventTarget {
           }
         },
         onerror: () => {
-          this.connectionError = true;
-          this.stop();
+          this.handleDisconnect();
           this.dispatchEvent(new CustomEvent('error', { detail: 'Connection error, please restart audio.' }));
         },
         onclose: () => {
-          this.connectionError = true;
-          this.stop();
-          this.dispatchEvent(new CustomEvent('error', { detail: 'Connection error, please restart audio.' }));
+          this.handleDisconnect();
+          this.dispatchEvent(new CustomEvent('error', { detail: 'Connection closed, please restart audio.' }));
         },
       },
     });
@@ -151,7 +149,7 @@ export class LiveMusicHelper extends EventTarget {
   }
 
   public pause() {
-    if (this.session) this.session.pause();
+    try { if (this.session) this.session.pause(); } catch {}
     this.setPlaybackState('paused');
     this.outputNode.gain.setValueAtTime(1, this.audioContext.currentTime);
     this.outputNode.gain.linearRampToValueAtTime(0, this.audioContext.currentTime + 0.1);
@@ -160,10 +158,23 @@ export class LiveMusicHelper extends EventTarget {
   }
 
   public stop() {
-    if (this.session) this.session.stop();
+    try { if (this.session) this.session.stop(); } catch {}
     this.setPlaybackState('stopped');
     this.outputNode.gain.setValueAtTime(0, this.audioContext.currentTime);
     this.outputNode.gain.linearRampToValueAtTime(1, this.audioContext.currentTime + 0.1);
+    this.nextStartTime = 0;
+    this.session = null;
+    this.sessionPromise = null;
+  }
+
+  private handleDisconnect() {
+    this.connectionError = true;
+    // Do NOT send any playback controls here: WS may already be closed.
+    this.setPlaybackState('stopped');
+    try {
+      this.outputNode.gain.setValueAtTime(0, this.audioContext.currentTime);
+      this.outputNode.gain.linearRampToValueAtTime(1, this.audioContext.currentTime + 0.1);
+    } catch {}
     this.nextStartTime = 0;
     this.session = null;
     this.sessionPromise = null;
