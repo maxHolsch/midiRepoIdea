@@ -25,3 +25,4 @@ dist-ssr
 
 # YoYo AI version control directory
 .yoyo/
+.vercel
