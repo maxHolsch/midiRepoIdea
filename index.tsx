@@ -14,11 +14,18 @@ import { AudioAnalyser } from './utils/AudioAnalyser';
 const model = 'lyria-realtime-exp';
 
 async function createAI() {
+  const start = performance.now();
   const res = await fetch('/api/token');
+  const durationMs = Math.round(performance.now() - start);
   if (!res.ok) {
+    const text = await res.text().catch(() => '');
+    console.error('Token fetch failed', { status: res.status, durationMs, body: text });
     throw new Error('Failed to obtain auth token');
   }
   const data = await res.json() as { token: string };
+  // Obfuscate token for logs (last 6 chars only)
+  const tokenPreview = data.token?.slice(-6);
+  console.log('Token fetched', { durationMs, tokenTail: tokenPreview });
   return new GoogleGenAI({ apiKey: data.token, apiVersion: 'v1alpha' });
 }
 

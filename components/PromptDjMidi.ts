@@ -307,6 +307,14 @@ export class PromptDjMidi extends LitElement {
   }
 
   private playPause() {
+    // Debounce to avoid rapid toggles from gesture jitter
+    const now = performance.now();
+    // @ts-ignore attach a transient field for debounce
+    if ((this as any)._lastToggle && now - (this as any)._lastToggle < 500) {
+      return;
+    }
+    // @ts-ignore store last toggle timestamp
+    (this as any)._lastToggle = now;
     this.dispatchEvent(new CustomEvent('play-pause'));
   }
 
