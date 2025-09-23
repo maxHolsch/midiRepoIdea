@@ -122,4 +122,17 @@ const DEFAULT_PROMPTS = [
   { color: '#d9b2ff', text: 'Thrash' },
 ];
 
-main();
+// Boot the app and surface failures instead of a blank screen
+main().catch((err) => {
+  // Log for debugging and show a friendly message to the user
+  console.error('App initialization failed:', err);
+  const el = document.createElement('div');
+  el.style.cssText = [
+    'color:#fff',
+    'background:#000',
+    'padding:16px',
+    'font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif',
+  ].join(';');
+  el.textContent = 'Setup failed. Check /api/token and GEMINI_API_KEY on the server.';
+  document.body.appendChild(el);
+});
