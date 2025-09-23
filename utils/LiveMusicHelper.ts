@@ -9,7 +9,8 @@ import { throttle } from './throttle';
 
 export class LiveMusicHelper extends EventTarget {
 
-  private ai: GoogleGenAI;
+  // Create a fresh client on demand so ephemeral tokens don't expire while idle
+  private aiFactory: () => Promise<GoogleGenAI>;
   private model: string;
 
   private session: LiveMusicSession | null = null;
@@ -29,9 +30,9 @@ export class LiveMusicHelper extends EventTarget {
 
   private prompts: Map<string, Prompt>;
 
-  constructor(ai: GoogleGenAI, model: string) {
+  constructor(aiFactory: () => Promise<GoogleGenAI>, model: string) {
     super();
-    this.ai = ai;
+    this.aiFactory = aiFactory;
     this.model = model;
     this.prompts = new Map();
     this.audioContext = new AudioContext({ sampleRate: 48000 });
@@ -44,7 +45,9 @@ export class LiveMusicHelper extends EventTarget {
   }
 
   private async connect(): Promise<LiveMusicSession> {
-    this.sessionPromise = this.ai.live.music.connect({
+    // Get a fresh client to ensure token validity at connection time
+    const ai = await this.aiFactory();
+    this.sessionPromise = ai.live.music.connect({
       model: this.model,
       callbacks: {
         onmessage: async (e: LiveMusicServerMessage) => {

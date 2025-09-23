@@ -23,7 +23,8 @@ async function createAI() {
 }
 
 async function main() {
-  const ai = await createAI();
+  // Pass a factory so we fetch a fresh ephemeral token at connect time
+  const aiFactory = () => createAI();
   const initialPrompts = buildInitialPrompts();
 
   const pdjMidi = new PromptDjMidi(initialPrompts);
@@ -32,7 +33,7 @@ async function main() {
   const toastMessage = new ToastMessage();
   document.body.appendChild(toastMessage);
 
-  const liveMusicHelper = new LiveMusicHelper(ai, model);
+  const liveMusicHelper = new LiveMusicHelper(aiFactory, model);
   liveMusicHelper.setWeightedPrompts(initialPrompts);
 
   const audioAnalyser = new AudioAnalyser(liveMusicHelper.audioContext);
