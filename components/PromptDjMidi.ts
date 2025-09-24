@@ -307,14 +307,6 @@ export class PromptDjMidi extends LitElement {
   }
 
   private playPause() {
-    // Debounce to avoid rapid toggles from gesture jitter
-    const now = performance.now();
-    // @ts-ignore attach a transient field for debounce
-    if ((this as any)._lastToggle && now - (this as any)._lastToggle < 500) {
-      return;
-    }
-    // @ts-ignore store last toggle timestamp
-    (this as any)._lastToggle = now;
     this.dispatchEvent(new CustomEvent('play-pause'));
   }
 
@@ -423,73 +415,35 @@ export class PromptDjMidi extends LitElement {
     this.overlayEl.height = Math.max(1, Math.floor(rect.height));
   }
 
-  // Hand tracking
-  // Preferred: MediaPipe Tasks HandLandmarker (more accurate + robust)
-  // Fallback: legacy MediaPipe Hands if Tasks is unavailable
-  private handLandmarker: any = null;
-  private handLandmarkerReady = false;
-  private hands: any = null; // legacy fallback
+  // Minimal, CPU-only fingertip tracker using motion + color is unreliable.
+  // Use MediaPipe Hands if available on window; otherwise skip gracefully.
+  private hands: any = null;
   private handsReady = false;
   private lastHandsTs: number = 0; // last time we received hand results
 
-  // Simple exponential smoothing for fingertips
-  private smoothThumb: {x:number;y:number}|null = null;
-  private smoothIndex: {x:number;y:number}|null = null;
-  private smoothingAlpha = 0.6; // higher = more responsive, lower = smoother
-
   private async ensureHands() {
-    if (this.handLandmarkerReady || this.handsReady) return;
-    if (!this.videoEl) return;
-    // Try to load MediaPipe Tasks HandLandmarker first (ESM via CDN)
-    try {
-      // @ts-ignore dynamic CDN import
-      const tasks = await import('https://esm.sh/@mediapipe/tasks-vision@0.10.0');
-      const vision = await tasks.FilesetResolver.forVisionTasks(
-        'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.0/wasm'
-      );
-      this.handLandmarker = await tasks.HandLandmarker.createFromOptions(vision, {
-        baseOptions: {
-          modelAssetPath:
-            'https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task',
-        },
-        numHands: 1,
-        runningMode: 'VIDEO',
-      });
-      this.handLandmarkerReady = true;
-      return;
-    } catch (e) {
-      // continue to legacy fallback
-      console.warn('HandLandmarker unavailable, falling back to legacy Hands', e);
-    }
-
-    // Fallback: legacy MediaPipe Hands if present on window
+    if (this.handsReady) return;
     // @ts-expect-error media pipe globals
     const Hands = (window as any).Hands;
-    if (!Hands) return;
+    if (!Hands || !this.videoEl) return;
     this.hands = new Hands({
       locateFile: (file: string) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`,
     });
     this.hands.setOptions({
       maxNumHands: 1,
       modelComplexity: 1,
-      minDetectionConfidence: 0.7,
-      minTrackingConfidence: 0.7,
+      minDetectionConfidence: 0.6,
+      minTrackingConfidence: 0.6,
     });
-    this.hands.onResults((res: any) => this.onLegacyHandsResults(res));
+    this.hands.onResults((res: any) => this.onHandsResults(res));
     this.handsReady = true;
   }
 
   private async loop() {
     await this.ensureHands();
-    if (this.videoEl && this.cameraRunning) {
+    if (this.hands && this.videoEl && this.cameraRunning) {
       try {
-        if (this.handLandmarkerReady && this.handLandmarker) {
-          const ts = performance.now();
-          const res = this.handLandmarker.detectForVideo(this.videoEl, ts);
-          this.onTasksHandsResults(res);
-        } else if (this.handsReady && this.hands) {
-          await this.hands.send({ image: this.videoEl });
-        }
+        await this.hands.send({ image: this.videoEl });
       } catch {}
     }
     // Safety: if tracking stalls, ensure any sustained piano note is released
@@ -502,7 +456,7 @@ export class PromptDjMidi extends LitElement {
     requestAnimationFrame(() => this.loop());
   }
 
-  private onLegacyHandsResults(res: any) {
+  private onHandsResults(res: any) {
     this.lastHandsTs = performance.now();
     const ctx = this.overlayCtx;
     const canvas = this.overlayEl;
@@ -533,26 +487,20 @@ export class PromptDjMidi extends LitElement {
     const thumbV = toViewport(landmarks[4]);
     const indexV = toViewport(landmarks[8]);
 
-    // Apply smoothing (legacy path)
-    const smooth = (prev: {x:number;y:number}|null, curr: {x:number;y:number}) =>
-      prev ? ({ x: prev.x + this.smoothingAlpha*(curr.x - prev.x), y: prev.y + this.smoothingAlpha*(curr.y - prev.y) }) : curr;
-    this.smoothThumb = smooth(this.smoothThumb, thumbV);
-    this.smoothIndex = smooth(this.smoothIndex, indexV);
-
     // Draw fingertips
     ctx.fillStyle = '#00e5ff';
     ctx.beginPath();
     // Draw fingertip markers in canvas space
     const toCanvas = (p: {x:number;y:number}) => ({ x: p.x - hostRect.left, y: p.y - hostRect.top });
-    const thumb = toCanvas(this.smoothThumb);
-    const index = toCanvas(this.smoothIndex);
+    const thumb = toCanvas(thumbV);
+    const index = toCanvas(indexV);
     ctx.arc(thumb.x, thumb.y, 6, 0, Math.PI * 2);
     ctx.arc(index.x, index.y, 6, 0, Math.PI * 2);
     ctx.fill();
 
-    const pinchDist = Math.hypot(this.smoothIndex.x - this.smoothThumb.x, this.smoothIndex.y - this.smoothThumb.y);
+    const pinchDist = Math.hypot(indexV.x - thumbV.x, indexV.y - thumbV.y);
     const pinch = pinchDist < Math.max(30, hostRect.width * 0.03);
-    const pinchPointViewport = { x: (this.smoothIndex.x + this.smoothThumb.x) / 2, y: (this.smoothIndex.y + this.smoothThumb.y) / 2 };
+    const pinchPointViewport = { x: (indexV.x + thumbV.x) / 2, y: (indexV.y + thumbV.y) / 2 };
     const pinchPoint = toCanvas(pinchPointViewport);
 
     const nowTs = performance.now();
@@ -648,132 +596,6 @@ export class PromptDjMidi extends LitElement {
     this.drawSelectionOverlay(ctx, undefined, 0);
 
     // Piano key press detection now requires a two-finger pinch over a key
-    this.handlePianoPinch(this.pinchDown, pinchPoint);
-  }
-
-  // New: Tasks HandLandmarker path
-  private onTasksHandsResults(res: any) {
-    this.lastHandsTs = performance.now();
-    const ctx = this.overlayCtx;
-    const canvas = this.overlayEl;
-    if (!ctx || !canvas) return;
-
-    // Clear overlay and draw piano
-    ctx.clearRect(0, 0, canvas.width, canvas.height);
-    this.drawPianoOverlay(ctx);
-
-    const landmarks = res?.landmarks?.[0];
-    if (!landmarks) {
-      this.drawSelectionOverlay(ctx);
-      this.handlePianoPinch(false, null);
-      this.resetTrackingIfInactive();
-      return;
-    }
-
-    const hostRect = this.getBoundingClientRect();
-    const toViewport = (pt: { x: number; y: number }) => ({
-      x: hostRect.left + (1 - pt.x) * hostRect.width, // mirror to match video mirror
-      y: hostRect.top + pt.y * hostRect.height,
-    });
-
-    const thumbV = toViewport(landmarks[4]);
-    const indexV = toViewport(landmarks[8]);
-
-    // Smoothing
-    const smooth = (prev: {x:number;y:number}|null, curr: {x:number;y:number}) =>
-      prev ? ({ x: prev.x + this.smoothingAlpha*(curr.x - prev.x), y: prev.y + this.smoothingAlpha*(curr.y - prev.y) }) : curr;
-    this.smoothThumb = smooth(this.smoothThumb, thumbV);
-    this.smoothIndex = smooth(this.smoothIndex, indexV);
-
-    // Draw smoothed fingertips
-    const toCanvas = (p: {x:number;y:number}) => ({ x: p.x - hostRect.left, y: p.y - hostRect.top });
-    const thumb = toCanvas(this.smoothThumb);
-    const index = toCanvas(this.smoothIndex);
-    ctx.fillStyle = '#00e5ff';
-    ctx.beginPath();
-    ctx.arc(thumb.x, thumb.y, 6, 0, Math.PI * 2);
-    ctx.arc(index.x, index.y, 6, 0, Math.PI * 2);
-    ctx.fill();
-
-    const pinchDist = Math.hypot(this.smoothIndex.x - this.smoothThumb.x, this.smoothIndex.y - this.smoothThumb.y);
-    const pinch = pinchDist < Math.max(30, hostRect.width * 0.03);
-    const pinchPointViewport = { x: (this.smoothIndex.x + this.smoothThumb.x) / 2, y: (this.smoothIndex.y + this.smoothThumb.y) / 2 };
-    const pinchPoint = toCanvas(pinchPointViewport);
-
-    const nowTs = performance.now();
-    const HOLD_MS = 450;
-    const ANGLE_VALUE_PER_RAD = 0.5;
-
-    // Orientation from wrist->index MCP (0,5)
-    const handAngle = (() => {
-      const wrist = toViewport(landmarks[0]);
-      const idxMcp = toViewport(landmarks[5]);
-      return Math.atan2(idxMcp.y - wrist.y, idxMcp.x - wrist.x);
-    })();
-
-    if (pinch) {
-      if (!this.pinchDown) {
-        this.pinchStartTs = nowTs;
-        const pp = this.renderRoot.querySelector('play-pause-button') as HTMLElement | null;
-        if (pp) {
-          const r = pp.getBoundingClientRect();
-          if (pinchPointViewport.x >= r.left && pinchPointViewport.x <= r.right && pinchPointViewport.y >= r.top && pinchPointViewport.y <= r.bottom) {
-            this.playPause();
-            this.candidatePromptId = null;
-            this.selectedPromptId = null;
-          }
-        }
-        const nearIns = this.findNearestInstrument(pinchPointViewport.x, pinchPointViewport.y);
-        if (nearIns && nearIns.dist < 90) {
-          this.selectedInstrument = nearIns.index;
-          this.candidatePromptId = null;
-          this.selectedPromptId = null;
-        } else {
-          const near = this.findNearestDial(pinchPointViewport.x, pinchPointViewport.y);
-          this.candidatePromptId = (near && near.dist < 90) ? near.promptId : null;
-          this.selectedPromptId = this.candidatePromptId;
-        }
-      } else {
-        if (!this.activePromptId && this.pinchStartTs && this.candidatePromptId && nowTs - this.pinchStartTs >= HOLD_MS) {
-          this.activePromptId = this.candidatePromptId;
-          this.rotationStartAngle = handAngle;
-          this.pinchStartY = pinchPointViewport.y;
-          const p = this.prompts.get(this.activePromptId);
-          const base = p ? p.weight : 0;
-          this.baseWeight = base;
-          const limit = 2/3;
-          this.minWeightAllowed = Math.max(0, base - limit);
-          this.maxWeightAllowed = Math.min(2, base + limit);
-        }
-      }
-
-    if (this.activePromptId && this.rotationStartAngle !== null && this.baseWeight !== null) {
-      let delta = handAngle - this.rotationStartAngle;
-      while (delta > Math.PI) delta -= Math.PI * 2;
-      while (delta < -Math.PI) delta += Math.PI * 2;
-      const rotationComponent = delta * ANGLE_VALUE_PER_RAD;
-      const verticalPx = (this.pinchStartY !== null) ? (this.pinchStartY - pinchPointViewport.y) : 0;
-      const hostRect2 = this.getBoundingClientRect();
-      const VALUE_PER_PX = 2 / Math.max(200, hostRect2.height * 0.4);
-      const verticalComponent = verticalPx * VALUE_PER_PX;
-      const proposed = this.baseWeight + rotationComponent + verticalComponent;
-      const clamped = Math.max(this.minWeightAllowed!, Math.min(this.maxWeightAllowed!, proposed));
-      this.setPromptWeight(this.activePromptId, clamped);
-    }
-    } else {
-      this.pinchStartTs = null;
-      this.candidatePromptId = null;
-      this.selectedPromptId = null;
-      this.activePromptId = null;
-      this.rotationStartAngle = null;
-      this.baseWeight = null;
-      this.minWeightAllowed = null;
-      this.maxWeightAllowed = null;
-      this.pinchStartY = null;
-    }
-    this.pinchDown = pinch;
-
-    this.drawSelectionOverlay(ctx, undefined, 0);
     this.handlePianoPinch(this.pinchDown, pinchPoint);
   }
 

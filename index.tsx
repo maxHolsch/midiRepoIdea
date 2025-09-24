@@ -11,27 +11,10 @@ import { ToastMessage } from './components/ToastMessage';
 import { LiveMusicHelper } from './utils/LiveMusicHelper';
 import { AudioAnalyser } from './utils/AudioAnalyser';
 
+const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY, apiVersion: 'v1alpha' });
 const model = 'lyria-realtime-exp';
 
-async function createAI() {
-  const start = performance.now();
-  const res = await fetch('/api/token');
-  const durationMs = Math.round(performance.now() - start);
-  if (!res.ok) {
-    const text = await res.text().catch(() => '');
-    console.error('Token fetch failed', { status: res.status, durationMs, body: text });
-    throw new Error('Failed to obtain auth token');
-  }
-  const data = await res.json() as { token: string };
-  // Obfuscate token for logs (last 6 chars only)
-  const tokenPreview = data.token?.slice(-6);
-  console.log('Token fetched', { durationMs, tokenTail: tokenPreview });
-  return new GoogleGenAI({ apiKey: data.token, apiVersion: 'v1alpha' });
-}
-
-async function main() {
-  // Pass a factory so we fetch a fresh ephemeral token at connect time
-  const aiFactory = () => createAI();
+function main() {
   const initialPrompts = buildInitialPrompts();
 
   const pdjMidi = new PromptDjMidi(initialPrompts);
@@ -40,7 +23,7 @@ async function main() {
   const toastMessage = new ToastMessage();
   document.body.appendChild(toastMessage);
 
-  const liveMusicHelper = new LiveMusicHelper(aiFactory, model);
+  const liveMusicHelper = new LiveMusicHelper(ai, model);
   liveMusicHelper.setWeightedPrompts(initialPrompts);
 
   const audioAnalyser = new AudioAnalyser(liveMusicHelper.audioContext);
@@ -130,17 +113,4 @@ const DEFAULT_PROMPTS = [
   { color: '#d9b2ff', text: 'Thrash' },
 ];
 
-// Boot the app and surface failures instead of a blank screen
-main().catch((err) => {
-  // Log for debugging and show a friendly message to the user
-  console.error('App initialization failed:', err);
-  const el = document.createElement('div');
-  el.style.cssText = [
-    'color:#fff',
-    'background:#000',
-    'padding:16px',
-    'font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif',
-  ].join(';');
-  el.textContent = 'Setup failed. Check /api/token and GEMINI_API_KEY on the server.';
-  document.body.appendChild(el);
-});
+main();

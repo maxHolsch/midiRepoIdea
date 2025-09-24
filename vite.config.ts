@@ -6,13 +6,14 @@ export default defineConfig(({ mode }) => {
     const env = loadEnv(mode, '.', '');
     return {
       server: {
-        // Use default Vite dev port to play nicely with `vercel dev` proxy
-        port: 5173,
+        port: 3000,
         host: '0.0.0.0',
       },
       plugins: [],
-      // Do not inline secrets into the client bundle.
-      define: {},
+      define: {
+        'process.env.API_KEY': JSON.stringify(env.GEMINI_API_KEY),
+        'process.env.GEMINI_API_KEY': JSON.stringify(env.GEMINI_API_KEY)
+      },
       resolve: {
         alias: {
           '@': path.resolve(__dirname, '.'),
